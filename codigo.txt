@@ -1,0 +1,190 @@
+;
+; PreLab-01.asm
+;
+; Author : Adrián Pascual - 22045
+
+.INCLUDE "M328PDEF.INC"
+.CSEG
+
+.ORG 0x00
+;*****************************************************************************************************************************************************
+; STACK POINTER SPL SPH
+;*****************************************************************************************************************************************************
+	LDI R16, LOW(RAMEND)
+	OUT SPL, R16
+	LDI R17, HIGH(RAMEND)
+	OUT SPH, R17
+;*****************************************************************************************************************************************************
+; CONFIGURACIÓN
+;*****************************************************************************************************************************************************
+SETUP:
+	LDI R16, (1 << CLKPCE)
+	STS CLKPR, R16			; Habilinado prescaler
+
+	LDI R16, 0b0000_0100
+	STS CLKPR, R16			; Prescaler de 16 fcpu = 1MHz
+
+	; Configurar los pines 
+	LDI R19, 0b10000000	// Entradas
+	OUT	DDRC, R19
+	LDI	R19, 0b00111111 // Pull ups
+	OUT	PORTC, R19
+	
+	LDI R19, 0b00111111 // Salidas
+	OUT DDRB, R19
+	LDI R19, 0b11111111
+	OUT DDRD, R19
+	
+	LDI R17, 0x3F // Estado inicial
+	LDI R30, 0x3D // Comparación para incrementar contador 1
+	LDI R29, 0x3B // Comparación para decrementar contador 1
+	LDI R28, 0x37 // Comparación para incrementar contador 2
+	LDI R27, 0x2F // Comparación para decrementar contador 2
+	LDI R26, 0x1F // Comparación para sumar contador 1 y 2
+
+	LDI R18, 0x00 // Inicializar contador 1 en 0x00
+	LDI R20, 0x00 // Inicializar contador 2 en 0x00
+
+;*****************************************************************************************************************************************************
+
+LOOP1:
+
+ 	IN R19, PINC
+	CP R17, R19
+	BREQ LOOP1
+	CALL DELAY // Antirrebote para los botones
+	IN R19, PINC
+	CP R30, R19 
+	BREQ INCREMENT_C1 // Salta a la función de incrementar contador 1
+	CP R29, R19	
+	BREQ DECREMENT_C1
+	CP R28, R19
+	BREQ INCREMENT_C2
+	CP R27, R19
+	BREQ DECREMENT_C2
+	CP R26, R19
+	BREQ SUMAR // Suma de ambos contadores
+	RJMP LOOP1
+	
+DELAY:
+	LDI R31, 10
+LOOP_DELAY:
+	DEC R31
+	CPI R31, 0
+	BRNE LOOP_DELAY
+	RET
+
+INCREMENT_C1:
+	IN R17, PINC
+	CBR R18, 0b0001_0000 // Limpiar bit 4 y 5
+	CBR R18, 0b0010_0000
+	; Incrementa el contador
+	INC R18
+	CPI R18, 16
+	BREQ Keep_On
+	BRNE ActualizarSalida
+
+DECREMENT_C1:
+	IN R17, PINC
+	CBR R18, 0b0001_0000
+	CBR R18, 0b0010_0000
+	; Decrementa el contador
+	DEC R18
+	CPI R18, 0xFF
+	BREQ ResetContador
+	RJMP ActualizarSalida
+
+INCREMENT_C2:
+	IN R17, PINC
+	; Incrementa el contador 2
+	INC R20
+	CPI R20, 16
+	BREQ Keep_On2
+	BRNE ActualizarSalida2
+
+DECREMENT_C2:
+	IN R17, PINC
+	; Decrementa el contador 2
+	DEC R20
+	CPI R20, 0xFF
+	BREQ ResetContador2
+	RJMP ActualizarSalida2
+
+SUMAR:
+	IN R17, PINC
+	MOV R21, R20
+	IN R22, SREG
+	ANDI R22, 0x01 // Asegurar que solo el bit de Carry esté encendido
+	; Sumar contador 1 y 2
+	CBR R18, 0b0001_0000
+	CBR R18, 0b0010_0000
+	ADD R21, R18
+	OR R21, R25 // Agregarlo al puerto (Acá inician modificaciones solo para mostrarlo más ordenado)
+	OR R21, R22
+
+	SBRC R21, 0 // Leer bit0
+	RJMP SET1
+	RJMP CLEAR1
+
+	SET1:
+	SBR R18, 0b0001_0000 // Setear bit4 del puerto B
+		
+	RJMP FNC2
+
+	CLEAR1:
+	CBR R18, 0b0001_0000  // Clear bit4 del puerto B
+
+	FNC2:
+	SBRC R21, 1 // Leer bit1
+	RJMP SET2
+	RJMP CLEAR2
+
+	RJMP SALIDA 
+
+	SET2:
+	SBR R18, 0b0010_0000 // Setear bit5
+	RJMP SALIDA
+
+	CLEAR2:
+	CBR R18, 0b0010_0000 // Clear bit5
+
+	// (Acá terminan las modificaciones)
+	SALIDA:
+	OUT PORTD, R21 // Salida en PIN 2 y 3
+	OUT PORTB, R18 // Salida en PIN 4 y 5 (PIN 0 y 1 del PORTD; Tx y Rx)
+	RJMP LOOP1		
+
+	; Reiniciar contador o dejar encendido
+	// Este apartado lo hice para que los 4 bits 
+	// Si ya están todos encendidos y se sigue Incrementando que el contador no aumente
+Keep_On:
+	LDI R18, 15
+	RJMP ActualizarSalida
+ResetContador: // Lo mismo para decrementar, si está en cero que no disminuya más de eso
+	CLR R18
+	RJMP ActualizarSalida
+Keep_On2:
+	LDI R20, 15
+	RJMP ActualizarSalida2
+ResetContador2:
+	CLR R20
+	RJMP ActualizarSalida2
+
+	; Actualiza la salida (actualiza el LED)
+ActualizarSalida:
+	OUT PORTB, R18
+	RJMP LOOP1
+ActualizarSalida2: // Acá se me ocurrió una forma para mostrar la salida moviendo los bits 4 espacios
+	CLR R25
+	MOV R25, R20
+	CLC
+    ROR R25
+	ROR R25
+	ROR R25
+	ROR R25
+	ROR R25
+
+; Envía el valor corrido al puerto 
+	OUT PORTD, R25
+	RJMP LOOP1
+;*****************************************************************************************************************************************************
